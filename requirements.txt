@@ -1,4 +1,4 @@
 streamlit
 pandas
-vnstock
+vnstock==0.2.9
 plotly
