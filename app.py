@@ -1,96 +1,128 @@
 import streamlit as st
 import pandas as pd
 import time
-from datetime import datetime, timedelta
 
-# --- 1. CẤU HÌNH GIAO DIỆN ---
-st.set_page_config(page_title="TopInvest Pro", layout="wide", page_icon="📈")
+# --- CẤU HÌNH ---
+st.set_page_config(page_title="TopInvest Auto", layout="wide", page_icon="🤖")
 
-# --- 2. XỬ LÝ THƯ VIỆN (BẮT LỖI CHẶT CHẼ) ---
+# --- PHẦN QUAN TRỌNG NHẤT: TỰ ĐỘNG NHẬN DIỆN PHIÊN BẢN ---
+# Đoạn này giúp web chạy được trên CẢ bản cũ và bản mới
 try:
-    # Đây là lệnh chỉ chạy được trên bản vnstock 0.2.9
-    from vnstock import stock_historical_data, price_board
+    # Thử gọi theo cách cũ (Bản 0.2.9)
+    from vnstock import price_board
+    VERSION = "OLD"
+    st.toast("Đang chạy phiên bản: Ổn định (Old Core)", icon="✅")
 except ImportError:
-    st.error("⚠️ LỖI PHIÊN BẢN: Hệ thống đang chạy phiên bản mới không tương thích.")
-    st.info("👉 Cách sửa: Vào GitHub > mở file requirements.txt > sửa thành: vnstock==0.2.9")
-    st.stop()
+    # Nếu lỗi, chuyển sang gọi theo cách mới (Bản 3.x)
+    try:
+        from vnstock import quote
+        VERSION = "NEW"
+        st.toast("Đang chạy phiên bản: Mới nhất (New Core)", icon="🚀")
+    except ImportError:
+        st.error("Lỗi nghiêm trọng: Không tìm thấy thư viện Vnstock.")
+        st.stop()
 
-# --- CSS GIAO DIỆN ---
+# --- CSS GIAO DIỆN DARK MODE ---
 st.markdown("""
 <style>
-    .stApp { background-color: #0E1117; color: white; }
-    .card { background-color: #1E1E1E; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }
-    .up { color: #00FF00; font-weight: bold; }
-    .down { color: #FF0000; font-weight: bold; }
-    .ref { color: #FFC107; font-weight: bold; }
-    .big-price { font-size: 20px; }
+    .stApp { background-color: #111; color: #eee; }
+    .card { background-color: #222; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }
+    .big-text { font-size: 24px; font-weight: bold; }
+    .green { color: #0f0; }
+    .red { color: #f44; }
+    .yellow { color: #fd0; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
+st.title("⚡ BẢNG GIÁ THÔNG MINH (AUTO-ADAPT)")
+st.caption("Hệ thống tự động điều chỉnh theo thư viện máy chủ.")
+
+# --- INPUT ---
 with st.sidebar:
-    st.header("⚙️ Cấu hình")
-    tickers = st.text_area("Danh sách mã:", "HPG, SSI, VND, DIG, PDR, FPT, MWG", height=150)
-    btn_scan = st.button("🚀 QUÉT THỊ TRƯỜNG", type="primary")
+    st.header("Danh mục")
+    default = "HPG, SSI, VND, FPT, MWG, TCB, STB, DIG, PDR"
+    tickers = st.text_area("Nhập mã:", default, height=150)
+    auto_ref = st.checkbox("Tự động cập nhật (30s)", value=True)
+    if st.button("Làm mới ngay"):
+        st.rerun()
 
-# --- HÀM LẤY DỮ LIỆU ---
-def get_data(symbols):
-    try:
-        return price_board(symbols)
-    except Exception as e:
-        return pd.DataFrame()
-
-def get_robot_status(symbol):
-    try:
-        end = datetime.now().strftime('%Y-%m-%d')
-        start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        df = stock_historical_data(symbol, start, end, "1D", "stock")
-        if df is None or len(df) < 10: return "N/A"
-        ma20 = df['close'].tail(20).mean()
-        price = df.iloc[-1]['close']
-        return "MUA" if price > ma20 else "BÁN"
-    except:
-        return "---"
-
-# --- MAIN APP ---
-st.title("📈 BẢNG GIÁ & TÍN HIỆU (Bản Ổn Định)")
-
-if btn_scan:
-    symbol_list = [x.strip().upper() for x in tickers.split(',') if x.strip()]
+# --- HÀM XỬ LÝ ĐA NĂNG ---
+def get_universal_data(symbol_list):
+    symbols_str = ",".join(symbol_list)
     
-    with st.spinner("Đang tải dữ liệu bản 0.2.9..."):
-        df = get_data(",".join(symbol_list))
-    
-    if not df.empty:
-        cols = st.columns(3)
-        for i, row in df.iterrows():
-            sym = row.get('Mã CP', '')
-            price = row.get('Khớp lệnh', 0)
-            change = row.get('+/-', 0)
-            per = row.get('%', 0)
+    if VERSION == "OLD":
+        # Xử lý cho bản cũ (price_board trả về tiếng Việt)
+        try:
+            df = price_board(symbols_str)
+            # Đổi tên cột cho thống nhất
+            df = df.rename(columns={
+                'Mã CP': 'symbol', 
+                'Khớp lệnh': 'price', 
+                '+/-': 'change', 
+                '%': 'percent',
+                'Tổng KL': 'volume'
+            })
+            return df
+        except: return pd.DataFrame()
+        
+    elif VERSION == "NEW":
+        # Xử lý cho bản mới (quote trả về tiếng Anh)
+        try:
+            df = quote(symbols_str)
+            # Bản mới đôi khi trả về cột khác nhau, ta map lại
+            # Ưu tiên các tên cột thường gặp trong bản 3.x
+            # Ví dụ: stockSymbol, lastPrice, change, changePercent
+            df['price'] = df.get('price', df.get('lastPrice', 0))
+            # Nếu giá nhỏ (đơn vị nghìn), nhân lên
+            if df['price'].mean() < 500: df['price'] = df['price'] * 1000
+                
+            df['symbol'] = df.get('symbol', df.get('stockSymbol', ''))
+            df['percent'] = df.get('percent', df.get('changePercent', 0)) * 100
             
-            # Màu sắc
-            color = "up" if change > 0 else "down" if change < 0 else "ref"
+            # Xử lý lỗi % quá lớn do định dạng
+            if df['percent'].mean() > 50: df['percent'] = df['percent'] / 100
+                
+            return df
+        except: return pd.DataFrame()
+
+# --- CHẠY CHƯƠNG TRÌNH ---
+symbol_list = [x.strip().upper() for x in tickers.split(',') if x.strip()]
+
+with st.spinner("Đang kết nối dữ liệu..."):
+    df = get_universal_data(symbol_list)
+
+if not df.empty:
+    cols = st.columns(3)
+    for i, row in df.iterrows():
+        try:
+            sym = row['symbol']
+            price = row['price']
+            change = row['change']
+            pct = row['percent']
+            vol = row.get('volume', row.get('totalVol', 0))
+            
+            color = "green" if change > 0 else "red" if change < 0 else "yellow"
             
             with cols[i % 3]:
                 st.markdown(f"""
                 <div class="card">
                     <div style="display:flex; justify-content:space-between;">
-                        <span style="font-size:22px; color:gold; font-weight:bold;">{sym}</span>
-                        <span class="{color} big-price">{price}</span>
+                        <h3 style="margin:0; color:gold;">{sym}</h3>
+                        <span class="big-text {color}">{price:,.0f}</span>
                     </div>
-                    <div style="text-align:right;" class="{color}">
-                        {change} ({per}%)
+                    <div style="text-align:right; font-weight:bold;" class="{color}">
+                        {change:,.0f} ({pct:.2f}%)
                     </div>
-                    <hr style="border-color:#333; margin:5px 0;">
-                    <div style="font-size:12px; color:#aaa;">
-                        Vol: {row.get('Tổng KL', 0):,} | Robot: <b>{get_robot_status(sym)}</b>
-                    </div>
+                    <div style="font-size:12px; color:#888;">Vol: {vol:,.0f}</div>
                 </div>
                 """, unsafe_allow_html=True)
-    else:
-        st.error("Không lấy được dữ liệu. Hãy thử lại sau 1 phút.")
+        except:
+            continue
 else:
-    st.info("Bấm nút 'QUÉT THỊ TRƯỜNG' để bắt đầu.")
+    st.warning("Chưa lấy được dữ liệu. Vui lòng đợi 30s hoặc bấm Làm mới.")
+
+if auto_ref:
+    time.sleep(30)
+    st.rerun()
 
 
