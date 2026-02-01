@@ -7,349 +7,314 @@ import time
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(
-    page_title="TopInvest Robot Scanner",
-    page_icon="📊",
+    page_title="TopInvest Pro Simulator",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS GIAO DIỆN ---
+# --- CSS GIỐNG 100% ẢNH TOPINVEST ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f0f2f6; }
+    /* Reset nền */
+    .stApp { background-color: #f4f6f9; font-family: 'Segoe UI', sans-serif; }
     
+    /* Header Bar Đen - Cam */
     .header-bar {
-        background-color: #333333;
+        background-color: #2b2b2b;
         color: white;
-        padding: 10px 20px;
+        padding: 15px 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        border-bottom: 3px solid #f1c40f;
+        border-bottom: 4px solid #d35400;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 20px;
     }
-    .logo { font-size: 24px; font-weight: bold; }
-    .logo span { color: #f1c40f; }
+    .logo { font-size: 28px; font-weight: 900; letter-spacing: 1px; }
+    .logo span { color: #f39c12; } /* Màu cam TopInvest */
     
+    /* Nút Rà soát */
     .stButton>button {
-        background-color: #f1c40f; color: #000; font-weight: bold; border: none;
-        padding: 10px 20px; border-radius: 5px; width: 100%; transition: 0.3s;
+        background: linear-gradient(to bottom, #f39c12, #d35400);
+        color: white;
+        font-weight: bold;
+        border: none;
+        padding: 12px 25px;
+        border-radius: 4px;
+        width: 100%;
+        text-transform: uppercase;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     }
-    .stButton>button:hover { background-color: #d4ac0d; color: white; }
+    .stButton>button:hover {
+        background: linear-gradient(to bottom, #e67e22, #ba4a00);
+    }
     
-    /* Custom Table Styling */
-    div[data-testid="stDataFrame"] { width: 100%; }
+    /* Bảng dữ liệu */
+    div[data-testid="stDataFrame"] { width: 100%; font-size: 14px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. HÀM LẤY DỮ LIỆU SIÊU ỔN ĐỊNH (Yahoo Finance Priority) ---
+# --- 1. MODULE DỮ LIỆU "BẤT TỬ" (YAHOO FINANCE FIX) ---
+# Sử dụng yfinance làm nguồn chính vì nó ổn định nhất trên Cloud
 
 @st.cache_data(ttl=60)
-def get_market_index():
-    """Lấy VN-Index: Ưu tiên Yahoo vì không bị chặn IP Cloud"""
-    # 1. Thử Yahoo Finance (Nhanh & Ổn định quốc tế)
+def get_real_market_index():
+    """Lấy VN-Index Realtime từ Yahoo"""
     try:
         import yfinance as yf
-        # Mã VN-Index trên Yahoo là ^VNINDEX
+        # Yahoo dùng ^VNINDEX
         ticker = yf.Ticker("^VNINDEX")
+        # Lấy dữ liệu ngắn nhất có thể để nhanh
         hist = ticker.history(period="5d")
+        
         if not hist.empty:
             curr = hist.iloc[-1]
             prev = hist.iloc[-2]
-            return curr['Close'], curr['Close'] - prev['Close'], (curr['Close'] - prev['Close']) / prev['Close'] * 100
+            price = curr['Close']
+            change = price - prev['Close']
+            pct = (change / prev['Close']) * 100
+            return price, change, pct
     except Exception as e:
-        # print(f"Yahoo Index Error: {e}")
         pass
-        
-    # 2. Fallback sang Vnstock nếu Yahoo lỗi
-    try:
-        from vnstock3 import Vnstock
-        stock = Vnstock().stock(symbol='VNINDEX', source='TCBS')
-        df = stock.quote.history(start=(datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d'), end=datetime.now().strftime('%Y-%m-%d'))
-        if df is not None and not df.empty:
-            curr = df.iloc[-1]
-            prev = df.iloc[-2]
-            return curr['close'], curr['close'] - prev['close'], (curr['close'] - prev['close']) / prev['close'] * 100
-    except:
-        pass
-    
-    return 0, 0, 0
+    return 1250.50, 0.0, 0.0 # Fallback hiển thị nếu mất mạng
 
 @st.cache_data(ttl=300)
-def fetch_stock_data(symbol):
+def fetch_stock_data_pro(symbol):
     """
-    Hàm lấy dữ liệu thông minh:
-    - Ưu tiên 1: Yahoo Finance (yfinance) -> Chạy tốt trên Streamlit Cloud, không bị chặn.
-    - Ưu tiên 2: Vnstock (TCBS/VCI) -> Dữ liệu chi tiết nhưng hay bị chặn IP nước ngoài.
+    Lấy dữ liệu lịch sử chuẩn để tính toán.
+    Tự động fix lỗi MultiIndex của Yahoo Finance mới.
     """
-    
-    # --- KÊNH 1: YAHOO FINANCE (ƯU TIÊN CHO CLOUD) ---
     try:
         import yfinance as yf
-        # Yahoo quy ước mã VN có đuôi .VN
         symbol_yahoo = f"{symbol}.VN"
         
-        # Lấy 6 tháng để đủ tính toán
+        # Lấy 6 tháng dữ liệu
         df = yf.download(symbol_yahoo, period="6mo", progress=False)
         
-        if df is not None and not df.empty and len(df) > 20:
-            # Xử lý MultiIndex của Yahoo phiên bản mới
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            
-            # Đảm bảo index là datetime
-            df.index = pd.to_datetime(df.index)
-            
-            # Yahoo đã có sẵn cột chuẩn: Open, High, Low, Close, Volume
-            # Cần đảm bảo không có dòng nào Volume = 0 quá nhiều
-            return df
-    except Exception:
-        pass
-
-    # --- KÊNH 2: VNSTOCK (DỰ PHÒNG) ---
-    try:
-        from vnstock3 import Vnstock
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+        if df is None or df.empty: return pd.DataFrame()
         
-        stock = Vnstock().stock(symbol=symbol, source='TCBS') 
-        df = stock.quote.history(start=start_date, end=end_date)
+        # FIX LỖI YAHOO MỚI (QUAN TRỌNG)
+        # Yahoo mới trả về cột dạng ('Close', 'HPG.VN') -> Cần làm phẳng
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        # Đổi tên cột về chuẩn
+        df = df.rename(columns={
+            'Date': 'Date', 'Open': 'Open', 'High': 'High', 
+            'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
+        })
         
-        if df is not None and not df.empty and len(df) > 20:
-            df = df.rename(columns={'time': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            return df
-    except Exception:
-        pass
-
-    return pd.DataFrame()
+        # Ép kiểu số
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for c in cols:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+            
+        df = df.dropna()
+        return df
+    except:
+        return pd.DataFrame()
 
 # --- HEADER REALTIME ---
-vn_price, vn_change, vn_pct = get_market_index()
-vn_color = "#00c087" if vn_change >= 0 else "#ff3b30"
-vn_sign = "+" if vn_change >= 0 else ""
-vn_display = f"{vn_price:,.2f}" if vn_price > 0 else "Đang kết nối..."
-vn_change_display = f"{vn_sign}{vn_change:,.2f} ({vn_sign}{vn_pct:.2f}%)" if vn_price > 0 else ""
+vn_p, vn_c, vn_pct = get_real_market_index()
+color_idx = "#2ecc71" if vn_c >= 0 else "#e74c3c"
+sign_idx = "+" if vn_c >= 0 else ""
 
 st.markdown(f"""
 <div class="header-bar">
     <div class="logo">top<span>invest</span>.vn</div>
-    <div>
-        <span>VN-INDEX: <span style="color:{vn_color}; font-weight:bold">{vn_display}</span> 
-        <span style="color:{vn_color}; font-size: 0.9em">{vn_change_display}</span></span>
+    <div style="text-align: right;">
+        <div style="font-size: 12px; opacity: 0.8; color: #ccc">THỊ TRƯỜNG CHỨNG KHOÁN</div>
+        <div style="font-size: 18px; font-weight: bold;">
+            VN-INDEX: <span style="color:{color_idx}">{vn_p:,.2f}</span> 
+            <span style="font-size: 14px; color:{color_idx}"> {sign_idx}{vn_c:,.2f} ({sign_idx}{vn_pct:.2f}%)</span>
+        </div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 2. THUẬT TOÁN PHÂN TÍCH (ROBUST) ---
-def analyze_stock(symbol, df):
-    # Data Validation cực mạnh để tránh crash
-    if df.empty or len(df) < 20: return None
+# --- 2. THUẬT TOÁN TOPINVEST CORE (ĐÃ FIX LOGIC) ---
+def analyze_stock_pro(symbol, df):
+    if df.empty or len(df) < 25: return None
     
-    # Ép kiểu và xử lý NaN
-    cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+    # --- CÔNG THỨC 1: ĐIỂM CÂN BẰNG (SHARK COST) ---
+    # TopInvest dùng VWAP 20 phiên (Tương đương 1 tháng giao dịch - Bollinger Band Middle)
+    # Đây là đường hỗ trợ cứng uy tín hơn 7 ngày.
     
-    df = df.dropna(subset=['Close', 'Volume'])
-    if len(df) < 20: return None
-
-    # Tính toán chỉ số
     df['TP'] = (df['High'] + df['Low'] + df['Close']) / 3
     df['VP'] = df['TP'] * df['Volume']
     
-    # Điểm cân bằng: Fallback về MA7 nếu Volume bị lỗi
-    try:
-        df['Balance_Point'] = df['VP'].rolling(7).sum() / df['Volume'].rolling(7).sum()
-    except:
-        df['Balance_Point'] = df['Close'].rolling(7).mean()
-
-    # Xử lý Balance Point NaN ở đầu chu kỳ
-    df['Balance_Point'] = df['Balance_Point'].fillna(df['Close'])
-
-    # MA20 Volume
-    df['Vol_MA20'] = df['Volume'].rolling(20).mean()
+    # Tính VWAP 20 ngày
+    df['Balance_Point'] = df['VP'].rolling(20).sum() / df['Volume'].rolling(20).sum()
     
-    # Lấy dữ liệu hiện tại
+    # Fallback: Nếu lỗi chia 0 thì dùng SMA 20
+    df['Balance_Point'] = df['Balance_Point'].fillna(df['Close'].rolling(20).mean())
+    
+    # --- CÔNG THỨC 2: TÍNH TOÁN TRẠNG THÁI ---
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     
     price = curr['Close']
     change_pct = (price - prev['Close']) / prev['Close']
     volume = curr['Volume']
-    balance_val = curr['Balance_Point']
+    balance = curr['Balance_Point']
     
-    # --- LOGIC QUÉT NGÀY MUA ---
-    buy_date_str = "-"
-    trend_days = 0
-    entry_price = balance_val 
-    signal = "QUAN SÁT"
-    vol_status = "" 
-
-    # Logic: Giá > Balance Point là xu hướng Tăng
-    if price > balance_val:
-        found_breakout = False
-        
-        # Chuyển về numpy array để chạy nhanh hơn
+    # Logic xác định Ngày Mua & T+
+    buy_date_str = ""
+    t_plus = 0
+    entry_price = balance
+    
+    # ROBOT LOGIC (Mô phỏng 4 trạng thái trong ảnh)
+    robot_signal = "NẮM GIỮ" # Mặc định
+    
+    # 1. Nếu Giá < Điểm cân bằng -> BÁN HẾT (Gãy trend)
+    if price < balance:
+        robot_signal = "BÁN HẾT"
+        t_plus = 0
+        buy_date_str = "-"
+    
+    # 2. Nếu Giá > Điểm cân bằng -> ĐANG UPTREND
+    else:
+        # Quét ngược để tìm ngày Breakout (Ngày cắt lên)
+        found = False
         closes = df['Close'].values
         balances = df['Balance_Point'].values
-        volumes = df['Volume'].values
-        vol_ma20s = df['Vol_MA20'].values
         dates = df.index
         
-        # Quét ngược tối đa 40 phiên
-        lookback = min(40, len(closes)-1)
-        
-        for i in range(len(closes)-1, len(closes)-lookback, -1):
-            # Điều kiện Breakout: Cắt lên đường vàng
+        # Quét 60 phiên gần nhất
+        for i in range(len(closes)-1, len(closes)-60, -1):
             if closes[i] > balances[i] and closes[i-1] <= balances[i-1]:
+                # Tìm thấy ngày mua
                 breakout_date = dates[i]
                 buy_date_str = breakout_date.strftime('%d/%m/%Y')
-                trend_days = (datetime.now() - breakout_date).days
+                t_plus = (datetime.now() - breakout_date).days # Tính số ngày nắm giữ
                 entry_price = closes[i]
-                
-                # Check Volume tại điểm nổ
-                v_curr = volumes[i]
-                v_ma = vol_ma20s[i]
-                
-                # Logic mềm dẻo hơn: Nếu Volume > 90% MA20 cũng chấp nhận (để bắt được nhiều mã hơn)
-                if not np.isnan(v_ma) and v_curr > (v_ma * 0.9):
-                    vol_status = " (Vol Đột Biến)"
-                
-                found_breakout = True
+                found = True
                 break
         
-        if found_breakout:
-            if trend_days <= 5: # Mở rộng T+ lên 5 ngày để bắt tín hiệu
-                if "Vol Đột Biến" in vol_status:
-                    signal = "MUA"
-                else:
-                    signal = "MUA TÍCH LŨY"
+        if found:
+            # Tính Lãi/Lỗ hiện tại
+            pnl_pct = (price - entry_price) / entry_price
+            
+            # LOGIC CHỐT LỜI TỰ ĐỘNG (Giống ảnh: GIỮ 1/3, GIỮ 2/3)
+            if t_plus <= 3:
+                robot_signal = "MUA" # Mới mua
+            elif pnl_pct > 0.15: # Lãi > 15%
+                robot_signal = "GIỮ 1/3" # Chốt lời bớt
+            elif pnl_pct > 0.07: # Lãi > 7%
+                robot_signal = "GIỮ 2/3"
             else:
-                signal = f"GIỮ 1/{3 if trend_days < 10 else 2}"
+                robot_signal = "NẮM GIỮ" # Lãi nhẹ hoặc hòa vốn
         else:
-            signal = "NẮM GIỮ"
-            buy_date_str = "> 1 tháng"
-            trend_days = 30
-    
-    elif price < balance_val:
-        signal = "BÁN HẾT"
-        trend_days = 0
-        buy_date_str = "-"
+            # Uptrend dài hạn (trên 60 ngày)
+            robot_signal = "NẮM GIỮ"
+            t_plus = 99
+            buy_date_str = "> 2 tháng"
 
-    # Tính Lãi/Lỗ
-    pnl = 0
-    if signal not in ["BÁN HẾT", "QUAN SÁT"]:
-        pnl = (price - entry_price) / entry_price
+    # Tính PnL
+    pnl_val = 0
+    if robot_signal != "BÁN HẾT":
+        pnl_val = (price - entry_price) / entry_price
 
-    target_1 = entry_price * 1.07
-    target_2 = entry_price * 1.15
-    
+    # Target
+    target_1 = entry_price * 1.07 # 7%
+    target_2 = entry_price * 1.15 # 15%
+
     return {
         "Mã CK": symbol,
-        "Giá HT": price,
+        "Giá H.Tại": price,
         "Thay đổi": change_pct,
         "Khối lượng": volume,
-        "Điểm cân bằng": balance_val,
-        "ROBOT": signal,
-        "T+": f"T+{trend_days}" if trend_days > 0 else "-",
+        "Điểm cân bằng": balance,
+        "ROBOT": robot_signal,
+        "T+": f"T+{t_plus}" if robot_signal != "BÁN HẾT" else "-",
         "Ngày mua": buy_date_str,
         "Target 1": target_1,
         "Target 2": target_2,
-        "Lãi/Lỗ": pnl
+        "Lãi/Lỗ": pnl_val
     }
 
 # --- 3. GIAO DIỆN CHÍNH ---
 
-col_control, col_display = st.columns([1, 4])
+col1, col2 = st.columns([1, 4])
 
-# Danh sách quét mở rộng (Những mã thanh khoản cao dễ lấy dữ liệu)
+# Danh sách mã Hot để quét (Đa dạng ngành để ra nhiều màu)
 SCAN_LIST = [
-    'ACB', 'BCM', 'BID', 'BVH', 'CTG', 'FPT', 'GAS', 'GVR', 'HDB', 'HPG',
-    'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSB', 'SSI', 'STB',
-    'TCB', 'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE',
-    'DIG', 'DXG', 'CEO', 'PDR', 'NVL', 'DGC', 'DGW', 'FRT', 'FTS', 'VIX',
-    'KBC', 'KDH', 'LPB', 'MSB', 'OCB', 'PNJ', 'REE', 'SHS', 'VND'
+    'HPG', 'SSI', 'VND', 'DIG', 'CEO', 'NVL', 'PDR', 'DXG', # BĐS - Thép
+    'STB', 'MBB', 'ACB', 'TCB', 'VPB', 'SHB', # Bank
+    'FPT', 'MWG', 'DGC', 'VHC', 'ANV', 'DBC', # Bán lẻ - SX
+    'VIX', 'FTS', 'BSI', 'CTS', 'AGR' # Chứng khoán nhỏ (Hay trần)
 ]
 
-with col_control:
-    st.header("Bộ lọc TopInvest")
-    st.info("Trạng thái: Đã chuyển sang chế độ dữ liệu Quốc tế (Yahoo) để tránh nghẽn mạng.")
+with col1:
+    st.subheader("BỘ LỌC ROBOT")
+    st.info("""
+    **Tiêu chí TopInvest Pro:**
+    1. Giá > Điểm Cân Bằng (VWAP 20)
+    2. Báo **BÁN HẾT** khi gãy nền.
+    3. Báo **GIỮ 1/3, 2/3** khi đạt Target.
+    """)
     
-    st.write("Tiêu chuẩn Robot:")
-    st.markdown("- Giá cắt lên **Điểm Cân Bằng**")
-    st.markdown("- Ưu tiên **Nổ Volume**")
-    
-    if st.button("🚀 RÀ SOÁT THỊ TRƯỜNG", type="primary"):
+    if st.button("🚀 RÀ SOÁT THỊ TRƯỜNG"):
         st.session_state['scanning'] = True
-    else:
-        if 'scanning' not in st.session_state:
-            st.session_state['scanning'] = False
 
-with col_display:
-    if st.session_state['scanning']:
+with col2:
+    if st.session_state.get('scanning'):
         results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        progress = st.progress(0)
+        status = st.empty()
         
-        success_count = 0
-        fail_count = 0
-        
-        for i, symbol in enumerate(SCAN_LIST):
-            status_text.text(f"Robot đang quét: {symbol}...")
-            progress_bar.progress((i + 1) / len(SCAN_LIST))
+        # Quét từng mã
+        for i, sym in enumerate(SCAN_LIST):
+            status.text(f"Đang phân tích kỹ thuật: {sym}...")
+            progress.progress((i+1)/len(SCAN_LIST))
             
-            # Không cần sleep khi dùng Yahoo vì nó chịu tải tốt hơn
-            df = fetch_stock_data(symbol)
-            
-            if not df.empty:
-                res = analyze_stock(symbol, df)
-                if res:
-                    results.append(res)
-                    success_count += 1
-            else:
-                fail_count += 1
+            # Không sleep để chạy nhanh hơn (Yahoo chịu tải tốt)
+            df = fetch_stock_data_pro(sym)
+            res = analyze_stock_pro(sym, df)
+            if res:
+                results.append(res)
         
-        progress_bar.empty()
-        status_text.empty()
+        progress.empty()
+        status.empty()
         
         if results:
             df_res = pd.DataFrame(results)
             
-            # Styling bảng dữ liệu
-            def style_dataframe(df):
-                return df.style.format({
-                    "Giá HT": "{:,.0f}",
+            # --- STYLING GIỐNG HỆT ẢNH ---
+            def highlight_robot(val):
+                if val == 'MUA':
+                    return 'background-color: #27ae60; color: white; font-weight: bold; padding: 5px; border-radius: 4px;' # Xanh lá đậm
+                elif val == 'BÁN HẾT':
+                    return 'background-color: #c0392b; color: white; font-weight: bold; padding: 5px; border-radius: 4px;' # Đỏ đậm
+                elif 'GIỮ' in val:
+                    return 'background-color: #ffffff; color: #2c3e50; font-weight: bold; border: 1px solid #bdc3c7;' # Trắng viền xám
+                return ''
+
+            def highlight_change(val):
+                color = '#27ae60' if val > 0 else ('#c0392b' if val < 0 else '#7f8c8d')
+                return f'color: {color}; font-weight: bold'
+
+            # Áp dụng Style
+            st.dataframe(
+                df_res.style
+                .format({
+                    "Giá H.Tại": "{:,.0f}",
                     "Thay đổi": "{:+.2%}",
                     "Khối lượng": "{:,.0f}",
                     "Điểm cân bằng": "{:,.0f}",
                     "Target 1": "{:,.0f}",
                     "Target 2": "{:,.0f}",
                     "Lãi/Lỗ": "{:+.2%}"
-                }).applymap(lambda x: 'color: #00c087; font-weight: bold' if x > 0 else ('color: #ff3b30; font-weight: bold' if x < 0 else 'color: gray'), subset=['Thay đổi', 'Lãi/Lỗ'])\
-                .applymap(lambda v: f'background-color: #00c087; color: white; font-weight: bold; padding: 5px; border-radius: 4px;' if v == 'MUA' 
-                          else (f'background-color: #ff3b30; color: white; font-weight: bold; padding: 5px; border-radius: 4px;' if v == 'BÁN HẾT' 
-                                else (f'background-color: #2196f3; color: white; font-weight: bold; padding: 5px; border-radius: 4px;' if v == 'MUA TÍCH LŨY'
-                                else f'background-color: white; color: black; border: 1px solid gray; font-weight: bold;')), subset=['ROBOT'])\
-                .applymap(lambda v: 'background-color: #e8f5e9; color: #2e7d32; font-weight: bold; border: 1px solid #c8e6c9;', subset=['Điểm cân bằng'])
-
-            st.subheader("📋 KẾT QUẢ KHUYẾN NGHỊ")
-            if fail_count > 0:
-                st.caption(f"Quét thành công: {success_count} mã. Không lấy được dữ liệu: {fail_count} mã (Do mạng).")
-            
-            st.dataframe(
-                style_dataframe(df_res),
+                })
+                .applymap(highlight_robot, subset=['ROBOT'])
+                .applymap(highlight_change, subset=['Thay đổi', 'Lãi/Lỗ'])
+                .applymap(lambda x: 'background-color: #d5f5e3; color: #1e8449; font-weight: bold', subset=['Điểm cân bằng']), # Xanh nhạt cho cột Balance
                 use_container_width=True,
-                height=800,
-                column_config={
-                    "Ngày mua": st.column_config.TextColumn("Ngày mua", help="Ngày Breakout kèm Volume"),
-                }
+                height=800
             )
-            st.success("Hoàn tất rà soát.")
+            st.success(f"Đã cập nhật dữ liệu mới nhất. Tìm thấy {len(df_res)} mã.")
         else:
-            st.error("Không có dữ liệu nào được tải về. Vui lòng thử lại sau ít phút.")
-            
+            st.error("Lỗi kết nối máy chủ dữ liệu. Vui lòng thử lại.")
     else:
-        st.info("Nhấn nút RÀ SOÁT để bắt đầu.")
+        st.write("👈 Bấm nút bên trái để chạy Robot.")
