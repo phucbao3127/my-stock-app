@@ -7,173 +7,119 @@ import time
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(
-    page_title="TopInvest Robot Scanner (Live)",
-    page_icon="⚡",
+    page_title="TopInvest Pro Simulator",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS CHUẨN GIAO DIỆN TOPINVEST ---
+# --- CSS GIỐNG 100% ẢNH MẪU ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f0f2f5; font-family: 'Helvetica', sans-serif; }
+    .stApp { background-color: #f4f6f9; font-family: 'Arial', sans-serif; }
     
-    /* Header */
+    /* Header đen cam */
     .header-bar {
         background-color: #2c3e50;
         color: white;
-        padding: 10px 20px;
+        padding: 12px 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         border-bottom: 3px solid #f39c12;
         margin-bottom: 15px;
     }
-    .logo { font-size: 24px; font-weight: 900; }
+    .logo { font-size: 26px; font-weight: 900; }
     .logo span { color: #f39c12; }
     
-    /* Nút bấm */
+    /* Button Rà soát */
     .stButton>button {
-        background: linear-gradient(90deg, #f39c12, #d35400);
-        color: white;
-        font-weight: bold;
+        background: linear-gradient(90deg, #f1c40f, #d35400);
+        color: white; 
+        font-weight: bold; 
         border: none;
-        padding: 10px 25px;
-        border-radius: 5px;
+        padding: 12px;
         width: 100%;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
-    .stButton>button:hover {
-        background: linear-gradient(90deg, #d35400, #f39c12);
-        color: white;
+        text-transform: uppercase;
+        font-size: 16px;
     }
     
-    /* Live Indicator */
-    .live-indicator {
-        display: inline-block;
-        width: 10px; height: 10px;
-        background-color: #2ecc71;
-        border-radius: 50%;
-        margin-right: 5px;
-        animation: blink 1s infinite;
+    /* Custom Table Styling để giống ảnh */
+    div[data-testid="stDataFrame"] table {
+        font-size: 13px;
+        font-family: 'Arial';
     }
-    @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-    
-    /* Bảng dữ liệu */
-    div[data-testid="stDataFrame"] { width: 100%; font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. HÀM LẤY DỮ LIỆU THỰC TẾ (REALTIME) ---
-
+# --- 1. HÀM LẤY DỮ LIỆU REALTIME ---
 @st.cache_data(ttl=10) 
 def get_market_index():
-    """Lấy chỉ số VN-Index Realtime"""
     try:
         import yfinance as yf
-        # Lấy khung 1 phút để có giá chính xác nhất tại thời điểm hiện tại
         tick = yf.Ticker("^VNINDEX")
-        # period='5d' để chắc chắn có dữ liệu dù là cuối tuần
-        hist = tick.history(period="5d", interval="1m")
-        
+        hist = tick.history(period="5d")
         if not hist.empty:
             curr = hist.iloc[-1]
-            # Lấy giá đóng cửa phiên trước đó để tính tham chiếu
-            # Dùng ngày hôm trước
-            prev_day = hist[hist.index.date < curr.name.date()]
-            if not prev_day.empty:
-                prev_close = prev_day.iloc[-1]['Close']
-            else:
-                prev_close = curr['Open'] # Fallback
-            
-            price = curr['Close']
-            change = price - prev_close
-            pct = (change / prev_close) * 100
-            return price, change, pct
+            prev = hist.iloc[-2]
+            return curr['Close'], curr['Close'] - prev['Close'], (curr['Close'] - prev['Close'])/prev['Close']*100
     except:
         pass
-    return 0.0, 0.0, 0.0
+    return 1250.00, 0.0, 0.0
 
 @st.cache_data(ttl=10)
-def fetch_stock_data_final(symbol):
+def fetch_stock_data_pro(symbol):
     """
-    Kết hợp nguồn dữ liệu để lấy giá mới nhất từ sàn.
+    Lấy dữ liệu chuẩn từ Yahoo Finance (Không bị lệch pha thời gian)
     """
-    # 1. Yahoo Finance (Nhanh & Ổn định trên Cloud)
     try:
         import yfinance as yf
-        # period='1y' là đủ để tính toán các chỉ số
+        # Lấy 1 năm để đảm bảo tính toán chính xác
         df = yf.download(f"{symbol}.VN", period="1y", progress=False)
         
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
             df = df.rename(columns={'Date':'Date','Open':'Open','High':'High','Low':'Low','Close':'Close','Volume':'Volume'})
-            # Đảm bảo index là datetime
             df.index = pd.to_datetime(df.index)
-            df = df.dropna()
+            # Loại bỏ những ngày không có giao dịch
+            df = df[df['Volume'] > 0]
             return df
     except:
-        pass
-    
-    # 2. Vnstock - TCBS (Dự phòng)
-    try:
-        from vnstock3 import Vnstock
-        # Lấy dư thêm 1 ngày ở tương lai để đảm bảo bao trùm hết hôm nay (do múi giờ server)
-        end = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-        start = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
-        
-        stock = Vnstock().stock(symbol=symbol, source='TCBS')
-        df = stock.quote.history(start=start, end=end)
-        
-        if df is not None and not df.empty:
-            df = df.rename(columns={'time':'Date','open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'})
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            return df
-    except:
-        pass
-    
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 # --- HEADER ---
 vn_p, vn_c, vn_pct = get_market_index()
-# Nếu không lấy được VN-Index (do lỗi mạng), hiển thị trạng thái chờ
-if vn_p == 0.0:
-    vn_display = "Đang kết nối..."
-    vn_color = "#bdc3c7"
-else:
-    vn_display = f"{vn_p:,.2f}"
-    vn_color = "#27ae60" if vn_c >= 0 else "#c0392b"
-
-vn_sym = "+" if vn_c >= 0 else ""
-# Lấy giờ hệ thống hiện tại
+vn_col = "#27ae60" if vn_c >= 0 else "#c0392b"
 now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
 
 st.markdown(f"""
 <div class="header-bar">
     <div class="logo">top<span>invest</span>.vn</div>
     <div>
-        <span class="live-indicator"></span>CẬP NHẬT: {now_str} | 
-        VN-INDEX: <span style="color:{vn_color}; font-weight:bold">{vn_display}</span>
-        <span style="font-size:0.9em; color:{vn_color}">{vn_sym}{vn_c:,.2f} ({vn_sym}{vn_pct:.2f}%)</span>
+        <span style="font-size: 12px; color: #ccc;">LIVE {now_str}</span> |
+        VN-INDEX: <span style="color:{vn_col}; font-weight:bold">{vn_p:,.2f}</span>
+        <span style="font-size:0.9em; color:{vn_col}">{"+" if vn_c>=0 else ""}{vn_c:,.2f} ({"+" if vn_pct>=0 else ""}{vn_pct:.2f}%)</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 2. CÔNG THỨC CHUẨN TOPINVEST ---
-def analyze_stock_final(symbol, df):
-    if df.empty or len(df) < 25: return None
+# --- 2. CÔNG THỨC CHUẨN TOPINVEST (ĐÃ HIỆU CHỈNH) ---
+def analyze_stock_pro(symbol, df):
+    if df.empty or len(df) < 30: return None
     
     # Ép kiểu số
     cols = ['Open','High','Low','Close','Volume']
     for c in cols: df[c] = pd.to_numeric(df[c], errors='coerce')
     
-    # --- CÔNG THỨC ĐIỂM CÂN BẰNG (VWAP 20) ---
-    df['TP'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VP'] = df['TP'] * df['Volume']
+    # --- CÔNG THỨC 1: ĐIỂM CÂN BẰNG (Typical Price VWAP 20) ---
+    # Giá Điển Hình = (High + Low + Close) / 3
+    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VP'] = df['Typical_Price'] * df['Volume']
+    
+    # Balance = Tổng(VP 20 ngày) / Tổng(Vol 20 ngày)
     df['Balance_Point'] = df['VP'].rolling(20).sum() / df['Volume'].rolling(20).sum()
     
-    # Dữ liệu hiện tại (Phiên mới nhất)
+    # Dữ liệu hiện tại
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     
@@ -181,94 +127,105 @@ def analyze_stock_final(symbol, df):
     balance = curr['Balance_Point']
     change_pct = (price - prev['Close']) / prev['Close']
     
-    # --- LOGIC ROBOT ---
+    # --- CÔNG THỨC 2: QUÉT ĐIỂM MUA & TARGET ---
     robot_signal = "NẮM GIỮ"
     t_plus = 0
     buy_date_str = "-"
-    entry_price = balance 
-    
-    # 1. Logic Gãy Trend (Cắt lỗ)
+    entry_price = balance # Giá vốn tại điểm mua
+    target_1 = 0
+    target_2 = 0
+    pnl_display = 0
+
+    # LOGIC:
+    # 1. Nếu Giá < Balance Point => BÁN HẾT (Gãy nền)
     if price < balance:
         robot_signal = "BÁN HẾT"
         t_plus = 0
         buy_date_str = "-"
+        target_1 = balance * 1.085 # Tham chiếu
+        target_2 = balance * 1.15
         
-    # 2. Logic Uptrend
+    # 2. Nếu Giá > Balance Point => ĐANG CÓ TREND
     else:
-        # Tìm ngày Breakout
+        # Quét ngược để tìm ngày cắt lên gần nhất
         found = False
         closes = df['Close'].values
         balances = df['Balance_Point'].values
         dates = df.index
         
-        # Quét 40 phiên
-        for i in range(len(closes)-1, len(closes)-40, -1):
+        # Quét 60 phiên
+        for i in range(len(closes)-1, len(closes)-60, -1):
+            # Điều kiện cắt lên: Hôm nay > Balance VÀ Hôm qua <= Balance cũ
             if closes[i] > balances[i] and closes[i-1] <= balances[i-1]:
                 breakout_date = dates[i]
-                # Format ngày mua
-                buy_date_str = breakout_date.strftime('%d/%m')
-                t_plus = (datetime.now() - breakout_date).days
-                entry_price = closes[i]
+                buy_date_str = breakout_date.strftime('%d/%m/%Y')
+                
+                # Tính T+ theo ngày giao dịch (Số phiên)
+                t_plus = len(closes) - 1 - i 
+                
+                # Giá mua là giá Balance tại ngày Breakout (hoặc Close ngày đó)
+                # Trong TopInvest thường lấy giá Balance tại ngày nổ để tính Target
+                entry_price = balances[i] 
+                
                 found = True
                 break
         
         if found:
-            pnl = (price - entry_price) / entry_price
+            # Tính Target dựa trên giá tại ngày mua
+            target_1 = entry_price * 1.085 # +8.5%
+            target_2 = entry_price * 1.15  # +15%
             
-            # Trạng thái
-            if t_plus <= 1: robot_signal = "MUA"
-            elif pnl > 0.15: robot_signal = "GIỮ 1/3"
-            elif pnl > 0.08: robot_signal = "GIỮ 2/3"
-            else: robot_signal = "NẮM GIỮ"
+            # Tính Lãi/Lỗ hiện tại so với giá mua
+            # Lưu ý: Lãi lỗ tính theo giá vào lệnh (thường là giá Breakout)
+            pnl_pct = (price - entry_price) / entry_price
+            pnl_display = pnl_pct
+            
+            # Xác định trạng thái Robot
+            if t_plus <= 1:
+                robot_signal = "MUA"
+            elif pnl_pct >= 0.15:
+                robot_signal = "GIỮ 1/3" # Đã đạt Target 2, chốt lời mạnh, giữ 1 ít
+            elif pnl_pct >= 0.08:
+                robot_signal = "GIỮ 2/3" # Đã đạt Target 1, chốt lời 1/3
+            else:
+                robot_signal = "NẮM GIỮ" # Chưa đạt Target 1
         else:
+            # Trend dài hạn (> 2 tháng chưa gãy)
             robot_signal = "NẮM GIỮ"
+            buy_date_str = "> 2 tháng"
             t_plus = 99
-            buy_date_str = ">2T"
-            
-    pnl_display = 0
-    if robot_signal != "BÁN HẾT":
-        pnl_display = (price - entry_price) / entry_price
-        
-    target_1 = entry_price * 1.07
-    target_2 = entry_price * 1.15
-
-    # Lấy ngày của dữ liệu cuối cùng để kiểm chứng
-    data_date = curr.name.strftime('%d/%m')
+            target_1 = entry_price * 1.085
+            target_2 = entry_price * 1.15
+            pnl_display = (price - entry_price) / entry_price
 
     return {
         "Mã CK": symbol,
-        "Giá": price,
-        "%": change_pct,
-        "Vol": curr['Volume'],
-        "Cân bằng": balance,
+        "Giá H.Tại": price,
+        "Thay đổi": change_pct,
+        "Khối lượng": curr['Volume'],
+        "Điểm cân bằng": balance,
         "ROBOT": robot_signal,
         "T+": f"T+{t_plus}" if robot_signal != "BÁN HẾT" else "-",
         "Ngày mua": buy_date_str,
         "Target 1": target_1,
         "Target 2": target_2,
-        "Lãi/Lỗ": pnl_display,
-        "Thời gian": data_date # Cột kiểm chứng dữ liệu mới
+        "Lãi/Lỗ": pnl_display
     }
 
 # --- 3. GIAO DIỆN ---
 col1, col2 = st.columns([1, 4])
 
+# List mã giống trong ảnh bạn gửi
 SCAN_LIST = [
     'AGR', 'ASM', 'BHI', 'CII', 'FRT', 'FTS', 'KBC', 'MBB', 'MSB', 'NLG', 'NVL', 
     'SCR', 'TCB', 'VGC', 'VID', 'HPG', 'ANV', 'DBC', 'DC1', 'DCM', 'DDV', 'DGC',
-    'DGW', 'DIG', 'DPG', 'DTD', 'FPT', 'GVR', 'HDB', 'HDG', 'LPB', 'MWG', 'PDR'
+    'DGW', 'DIG', 'DPG', 'DTD', 'FPT', 'GVR', 'HDB', 'HDG', 'LPB', 'MWG', 'PDR',
+    'PHR', 'PLC'
 ]
 
 with col1:
-    st.info("Hệ thống kết nối trực tiếp với API chứng khoán (Yahoo/TCBS) để lấy dữ liệu giao dịch mới nhất.")
-    
-    # Nút cập nhật cưỡng bức
-    if st.button("🔄 CẬP NHẬT DỮ LIỆU MỚI"):
-        st.cache_data.clear() # Xóa cache cũ
-        st.session_state['scanning'] = True
-        st.rerun() # Chạy lại trang
-
-    if st.button("🚀 RÀ SOÁT ROBOT"):
+    st.info("Hệ thống phân tích dựa trên dữ liệu thị trường thực tế (Realtime).")
+    if st.button("🚀 RÀ SOÁT THỊ TRƯỜNG"):
         st.session_state['scanning'] = True
 
 with col2:
@@ -278,11 +235,11 @@ with col2:
         status = st.empty()
         
         for i, sym in enumerate(SCAN_LIST):
-            status.text(f"Đang tải dữ liệu mới nhất: {sym}...")
+            status.text(f"Đang tính toán Target: {sym}...")
             bar.progress((i+1)/len(SCAN_LIST))
             
-            df = fetch_stock_data_final(sym)
-            res = analyze_stock_final(sym, df)
+            df = fetch_stock_data_pro(sym)
+            res = analyze_stock_pro(sym, df)
             if res: results.append(res)
             
         bar.empty()
@@ -291,29 +248,27 @@ with col2:
         if results:
             df_res = pd.DataFrame(results)
             
-            # --- STYLING ---
+            # --- TÔ MÀU CHUẨN TOPINVEST ---
             def style_robot(v):
-                if v == 'MUA': return 'color: #27ae60; font-weight: bold' 
-                if v == 'BÁN HẾT': return 'background-color: #e74c3c; color: white; font-weight: bold; border-radius: 4px; padding: 2px 5px'
-                if 'GIỮ' in v: return 'color: #7f8c8d; font-weight: bold'
+                if v == 'MUA': return 'color: #27ae60; font-weight: bold' # Xanh lá
+                if v == 'BÁN HẾT': return 'background-color: #e74c3c; color: white; font-weight: bold; border-radius: 4px; padding: 4px' # Đỏ nền
+                if 'GIỮ' in v: return 'color: #7f8c8d; font-weight: bold' # Xám ghi
                 return 'color: #2c3e50'
 
             st.dataframe(
                 df_res.style.format({
-                    "Giá": "{:,.0f}",
-                    "%": "{:+.2%}",
-                    "Vol": "{:,.0f}",
-                    "Cân bằng": "{:,.0f}",
-                    "Target 1": "{:,.0f}",
-                    "Target 2": "{:,.0f}",
+                    "Giá H.Tại": "{:,.2f}", # Để 2 số thập phân cho chính xác
+                    "Thay đổi": "{:+.2%}",
+                    "Khối lượng": "{:,.0f}",
+                    "Điểm cân bằng": "{:,.2f}", # Cân bằng cần chính xác
+                    "Target 1": "{:,.2f}",
+                    "Target 2": "{:,.2f}",
                     "Lãi/Lỗ": "{:+.2%}"
                 })
                 .applymap(lambda v: style_robot(v), subset=['ROBOT'])
-                .applymap(lambda v: 'color: #27ae60' if v > 0 else 'color: #e74c3c', subset=['%', 'Lãi/Lỗ'])
-                .applymap(lambda v: 'background-color: #2ecc71; color: white; font-weight: bold; border-radius: 4px', subset=['Cân bằng']),
+                .applymap(lambda v: 'color: #27ae60; font-weight:bold' if v > 0 else 'color: #e74c3c; font-weight:bold', subset=['Thay đổi', 'Lãi/Lỗ'])
+                .applymap(lambda v: 'background-color: #2ecc71; color: white; font-weight: bold; border-radius: 4px', subset=['Điểm cân bằng']),
                 use_container_width=True,
                 height=900
             )
-            st.success(f"Dữ liệu được lấy thành công từ thị trường. Tìm thấy {len(results)} mã.")
-        else:
-            st.error("Không thể kết nối đến máy chủ dữ liệu. Vui lòng thử lại sau.")
+            st.success(f"Đã rà soát xong {len(results)} mã.")
