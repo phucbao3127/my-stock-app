@@ -1,4 +1,9 @@
 streamlit
 pandas
+numpy
+plotly
+yfinance
+vnstock3
 lxml
-vnstock==0.2.9
+requests
+pytz
