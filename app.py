@@ -52,7 +52,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. HÀM LẤY DỮ LIỆU REALTIME ---
+# --- 1. HÀM LẤY DỮ LIỆU REALTIME (ĐÃ FIX LỖI CRASH) ---
 @st.cache_data(ttl=10) 
 def get_market_index():
     try:
@@ -70,7 +70,8 @@ def get_market_index():
 @st.cache_data(ttl=10)
 def fetch_stock_data_pro(symbol):
     """
-    Lấy dữ liệu chuẩn từ Yahoo Finance (Không bị lệch pha thời gian)
+    Lấy dữ liệu chuẩn từ Yahoo Finance.
+    Đã fix lỗi trả về NoneType gây crash app.
     """
     try:
         import yfinance as yf
@@ -78,14 +79,29 @@ def fetch_stock_data_pro(symbol):
         df = yf.download(f"{symbol}.VN", period="1y", progress=False)
         
         if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            # Xử lý MultiIndex (lỗi thường gặp của yfinance mới)
+            if isinstance(df.columns, pd.MultiIndex): 
+                df.columns = df.columns.get_level_values(0)
+            
+            # Đổi tên cột chuẩn
             df = df.rename(columns={'Date':'Date','Open':'Open','High':'High','Low':'Low','Close':'Close','Volume':'Volume'})
-            df.index = pd.to_datetime(df.index)
-            # Loại bỏ những ngày không có giao dịch
+            
+            # Đảm bảo index là datetime
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+
+            # Loại bỏ những ngày không có giao dịch (Volume = 0 hoặc NaN)
+            df = df.dropna(subset=['Close', 'Volume'])
             df = df[df['Volume'] > 0]
+            
             return df
-    except:
-        return pd.DataFrame()
+            
+    except Exception as e:
+        # print(f"Error fetching {symbol}: {e}")
+        pass
+        
+    # Luôn trả về DataFrame rỗng thay vì None để tránh lỗi AttributeError
+    return pd.DataFrame()
 
 # --- HEADER ---
 vn_p, vn_c, vn_pct = get_market_index()
@@ -105,11 +121,14 @@ st.markdown(f"""
 
 # --- 2. CÔNG THỨC CHUẨN TOPINVEST (ĐÃ HIỆU CHỈNH) ---
 def analyze_stock_pro(symbol, df):
-    if df.empty or len(df) < 30: return None
+    # Fix lỗi: Kiểm tra df is None trước
+    if df is None or df.empty or len(df) < 30: return None
     
-    # Ép kiểu số
+    # Ép kiểu số để tránh lỗi tính toán
     cols = ['Open','High','Low','Close','Volume']
-    for c in cols: df[c] = pd.to_numeric(df[c], errors='coerce')
+    for c in cols: 
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
     
     # --- CÔNG THỨC 1: ĐIỂM CÂN BẰNG (Typical Price VWAP 20) ---
     # Giá Điển Hình = (High + Low + Close) / 3
@@ -125,6 +144,10 @@ def analyze_stock_pro(symbol, df):
     
     price = curr['Close']
     balance = curr['Balance_Point']
+    
+    # Kiểm tra nếu Balance chưa tính được (NaN)
+    if pd.isna(balance): return None
+
     change_pct = (price - prev['Close']) / prev['Close']
     
     # --- CÔNG THỨC 2: QUÉT ĐIỂM MUA & TARGET ---
@@ -154,8 +177,14 @@ def analyze_stock_pro(symbol, df):
         dates = df.index
         
         # Quét 60 phiên
-        for i in range(len(closes)-1, len(closes)-60, -1):
+        # Dùng min để tránh lỗi index nếu dữ liệu ít hơn 60
+        lookback = min(60, len(closes)-1)
+        
+        for i in range(len(closes)-1, len(closes)-lookback, -1):
             # Điều kiện cắt lên: Hôm nay > Balance VÀ Hôm qua <= Balance cũ
+            # Kiểm tra nan để tránh lỗi so sánh
+            if pd.isna(balances[i]) or pd.isna(balances[i-1]): continue
+
             if closes[i] > balances[i] and closes[i-1] <= balances[i-1]:
                 breakout_date = dates[i]
                 buy_date_str = breakout_date.strftime('%d/%m/%Y')
@@ -164,7 +193,6 @@ def analyze_stock_pro(symbol, df):
                 t_plus = len(closes) - 1 - i 
                 
                 # Giá mua là giá Balance tại ngày Breakout (hoặc Close ngày đó)
-                # Trong TopInvest thường lấy giá Balance tại ngày nổ để tính Target
                 entry_price = balances[i] 
                 
                 found = True
@@ -176,7 +204,6 @@ def analyze_stock_pro(symbol, df):
             target_2 = entry_price * 1.15  # +15%
             
             # Tính Lãi/Lỗ hiện tại so với giá mua
-            # Lưu ý: Lãi lỗ tính theo giá vào lệnh (thường là giá Breakout)
             pnl_pct = (price - entry_price) / entry_price
             pnl_display = pnl_pct
             
@@ -220,7 +247,7 @@ SCAN_LIST = [
     'AGR', 'ASM', 'BHI', 'CII', 'FRT', 'FTS', 'KBC', 'MBB', 'MSB', 'NLG', 'NVL', 
     'SCR', 'TCB', 'VGC', 'VID', 'HPG', 'ANV', 'DBC', 'DC1', 'DCM', 'DDV', 'DGC',
     'DGW', 'DIG', 'DPG', 'DTD', 'FPT', 'GVR', 'HDB', 'HDG', 'LPB', 'MWG', 'PDR',
-    'PHR', 'PLC'
+    'PHR', 'PLC', 'SSI', 'VND', 'VIX'
 ]
 
 with col1:
@@ -239,8 +266,10 @@ with col2:
             bar.progress((i+1)/len(SCAN_LIST))
             
             df = fetch_stock_data_pro(sym)
-            res = analyze_stock_pro(sym, df)
-            if res: results.append(res)
+            # Kiểm tra df có dữ liệu không trước khi phân tích
+            if df is not None and not df.empty:
+                res = analyze_stock_pro(sym, df)
+                if res: results.append(res)
             
         bar.empty()
         status.empty()
@@ -272,3 +301,5 @@ with col2:
                 height=900
             )
             st.success(f"Đã rà soát xong {len(results)} mã.")
+        else:
+            st.warning("Không lấy được dữ liệu. Vui lòng thử lại sau.")
